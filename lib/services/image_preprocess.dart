@@ -14,10 +14,12 @@ import 'package:path_provider/path_provider.dart';
 /// original yang bisa sangat besar. Fungsi ini melakukan resize + encode
 /// JPEG secara manual sehingga PNG pun ikut dikompres sebelum dikirim
 /// ke model.
+///
+/// Default mengikuti Fast CPU mode: maksimal 640 px, kualitas 75.
 Future<String> normalizeFoodPhoto(
   XFile file, {
-  int maxWidth = 1280,
-  int quality = 85,
+  int maxWidth = 640,
+  int quality = 75,
 }) async {
   final String lower = file.path.toLowerCase();
   // Jalur cepat: JPEG kecil sudah cukup, pakai langsung.

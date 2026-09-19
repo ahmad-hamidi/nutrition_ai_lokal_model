@@ -36,6 +36,10 @@ class QwenFoodVisionService {
           'qwen3-vl': LlamaModelConfig(
             modelPath: modelPath,
             mmprojPath: mmprojPath,
+            // A null context becomes n_ctx=0 (the model's training context).
+            // Bound the KV cache instead of allocating it for that full context.
+            contextSize: 4096,
+            imageMaxTokens: 512,
           ),
         },
       );
@@ -44,6 +48,7 @@ class QwenFoodVisionService {
 
     final LlamaResponseObject response = await _client!.responses.create(
       model: 'qwen3-vl',
+      maxOutputTokens: 1024,
       input: <LlamaResponseInputItem>[
         LlamaResponseInputItem(
           role: 'user',
@@ -66,16 +71,16 @@ class QwenFoodVisionService {
 
     return '''
 Anda adalah vision model lokal untuk aplikasi nutrisi Indonesia.
-Analisis HANYA makanan/minuman yang benar-benar terlihat pada foto. Jangan mengarang objek yang tidak terlihat.
+Analisis HANYA makanan/minuman yang benar-benar terlihat pada foto. Jangan mengarang objek.
 
 Pilih food_id PALING DEKAT dari katalog lokal berikut:
 $catalog
 
-Tugas:
-1. Identifikasi maksimal 6 komponen makanan yang terlihat.
-2. Estimasikan gram secara konservatif dari foto 2D. Jika tidak yakin, gunakan porsi umum dan turunkan confidence.
-3. Buat nama hidangan singkat.
-4. Buat resep PERKIRAAN singkat berdasarkan makanan yang terlihat. Jangan mengklaim resep pasti.
+Tugas cepat:
+1. Identifikasi maksimal 4 komponen makanan utama yang terlihat.
+2. Estimasikan gram secara konservatif dari foto 2D.
+3. Jika tidak yakin, gunakan porsi umum dan turunkan confidence.
+4. Buat nama hidangan singkat.
 
 Balas HANYA JSON valid tanpa markdown dengan schema tepat ini:
 {
@@ -87,15 +92,10 @@ Balas HANYA JSON valid tanpa markdown dengan schema tepat ini:
       "estimated_grams": 120,
       "confidence": 0.82
     }
-  ],
-  "recipe": {
-    "title": "string",
-    "ingredients": ["string"],
-    "steps": ["string"]
-  }
+  ]
 }
 
-Aturan confidence: 0.0 sampai 1.0. Jangan memberi nilai nutrisi; aplikasi menghitung nutrisi dari database lokal.
+Aturan: confidence 0.0 sampai 1.0. Jangan menjelaskan. Jangan membuat resep. Jangan memberi nilai nutrisi.
 ''';
   }
 
@@ -110,7 +110,7 @@ Aturan confidence: 0.0 sampai 1.0. Jangan memberi nilai nutrisi; aplikasi menghi
     final Set<String> usedIds = <String>{};
     final dynamic foodsValue = decoded['foods'];
     if (foodsValue is List<dynamic>) {
-      for (final dynamic row in foodsValue.take(6)) {
+      for (final dynamic row in foodsValue.take(4)) {
         if (row is! Map<String, dynamic>) continue;
         final String foodId = (row['food_id'] ?? '').toString().trim();
         final String observedName = (row['observed_name'] ?? '').toString().trim();

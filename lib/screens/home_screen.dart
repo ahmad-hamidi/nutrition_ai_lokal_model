@@ -210,15 +210,20 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final XFile? file = await _picker.pickImage(
         source: source,
-        imageQuality: 85,
-        maxWidth: 1280,
+        imageQuality: 75,
+        maxWidth: 640,
+        maxHeight: 640,
       );
       if (file == null) return;
 
       if (mounted) setState(() => _stage = 'Menyiapkan foto...');
-      final String photoPath = await normalizeFoodPhoto(file);
+      final String photoPath = await normalizeFoodPhoto(
+        file,
+        maxWidth: 640,
+        quality: 75,
+      );
 
-      if (mounted) setState(() => _stage = 'Qwen3-VL sedang menganalisis foto di perangkat...');
+      if (mounted) setState(() => _stage = 'Mode cepat: Qwen3-VL menganalisis foto 640 px di perangkat...');
       final QwenVisionResult result = await _vision.analyze(
         imagePath: photoPath,
         modelPath: _modelStatus.modelPath!,
@@ -944,7 +949,7 @@ class _RecipeCard extends StatelessWidget {
     return Card(
       child: ExpansionTile(
         leading: const Icon(Icons.menu_book_outlined),
-        title: const Text('Resep perkiraan Qwen'),
+        title: const Text('Resep cepat lokal'),
         subtitle: Text(title),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         children: <Widget>[
