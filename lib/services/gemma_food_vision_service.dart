@@ -6,6 +6,8 @@ import 'package:flutter_gemma/flutter_gemma.dart';
 import '../data/food_database.dart';
 import '../models/food.dart';
 import '../models/food_vision_result.dart';
+import '../models/weekly_plan.dart';
+import 'weekly_menu_prompt.dart';
 
 class GemmaFoodVisionService {
   dynamic _model;
@@ -48,6 +50,42 @@ class GemmaFoodVisionService {
     }
 
     return FoodVisionResultParser.parse(buffer.toString().trim());
+  }
+
+  /// Membuat 1 hari menu (teks saja, tanpa foto). Output dibatasi 1024
+  /// token agar muat untuk 3 meal dalam sekali panggil.
+  Future<DailyMealPlan> generateDailyMenu({
+    required String modelPath,
+    required String dayLabel,
+    Set<String> avoidIds = const <String>{},
+  }) async {
+    _model ??= await _loadModel(modelPath);
+    final dynamic chat = await _model.createChat(
+      maxOutputTokens: 1024,
+      systemInstruction:
+          'Anda adalah perencana menu lokal untuk aplikasi nutrisi Indonesia. '
+          'Jawab ringkas dan patuhi schema JSON yang diminta.',
+    );
+
+    await chat.addQueryChunk(
+      Message.text(
+        text: buildDailyMenuPrompt(dayLabel: dayLabel, avoidIds: avoidIds),
+        isUser: true,
+      ),
+    );
+
+    final StringBuffer buffer = StringBuffer();
+    await for (final ModelResponse response in chat.generateChatResponseAsync()) {
+      if (response is TextResponse) buffer.write(response.token);
+    }
+
+    try {
+      await chat.session.close();
+    } catch (_) {
+      // Session cleanup is best-effort; keep model warm for the next day.
+    }
+
+    return parseDailyMenu(buffer.toString().trim(), dayLabel);
   }
 
   Future<dynamic> _loadModel(String modelPath) async {

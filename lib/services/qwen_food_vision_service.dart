@@ -1,6 +1,8 @@
 import 'package:lib_llama_cpp/lib_llama_cpp.dart';
 
 import '../models/food_vision_result.dart';
+import '../models/weekly_plan.dart';
+import 'weekly_menu_prompt.dart';
 
 class QwenFoodVisionService {
   LlamaOpenAIClient? _client;
@@ -45,6 +47,47 @@ class QwenFoodVisionService {
 
     final String raw = response.outputText.trim();
     return parseResponse(raw);
+  }
+
+  /// Membuat 1 hari menu (teks saja, tanpa foto) memakai runtime Qwen
+  /// yang sudah dimuat. Temperature lebih tinggi agar menu bervariasi.
+  Future<DailyMealPlan> generateDailyMenu({
+    required String modelPath,
+    required String mmprojPath,
+    required String dayLabel,
+    Set<String> avoidIds = const <String>{},
+  }) async {
+    final String signature = '$modelPath::$mmprojPath';
+    if (_client == null || _loadedSignature != signature) {
+      _client = LlamaOpenAIClient(
+        models: <String, LlamaModelConfig>{
+          'qwen3-vl': LlamaModelConfig(
+            modelPath: modelPath,
+            mmprojPath: mmprojPath,
+            contextSize: 4096,
+            imageMaxTokens: 1024,
+          ),
+        },
+      );
+      _loadedSignature = signature;
+    }
+
+    final LlamaResponseObject response = await _client!.responses.create(
+      model: 'qwen3-vl',
+      maxOutputTokens: 2048,
+      temperature: 0.7,
+      input: <LlamaResponseInputItem>[
+        LlamaResponseInputItem(
+          role: 'user',
+          content: [
+            LlamaTextPart(
+              buildDailyMenuPrompt(dayLabel: dayLabel, avoidIds: avoidIds),
+            ),
+          ],
+        ),
+      ],
+    );
+    return parseDailyMenu(response.outputText.trim(), dayLabel);
   }
 
   String _buildPrompt() {
