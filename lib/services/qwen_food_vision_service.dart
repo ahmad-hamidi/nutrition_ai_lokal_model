@@ -10,12 +10,14 @@ class QwenVisionResult {
   const QwenVisionResult({
     required this.items,
     required this.rawResponse,
+    this.unmatchedFoods = const <String>[],
     this.mealName,
     this.recipe,
   });
 
   final List<DetectedFood> items;
   final String rawResponse;
+  final List<String> unmatchedFoods;
   final String? mealName;
   final RecipeSuggestion? recipe;
 }
@@ -39,7 +41,7 @@ class QwenFoodVisionService {
             // A null context becomes n_ctx=0 (the model's training context).
             // Bound the KV cache instead of allocating it for that full context.
             contextSize: 4096,
-            imageMaxTokens: 512,
+            imageMaxTokens: 1024,
           ),
         },
       );
@@ -49,6 +51,7 @@ class QwenFoodVisionService {
     final LlamaResponseObject response = await _client!.responses.create(
       model: 'qwen3-vl',
       maxOutputTokens: 1024,
+      temperature: 0.1,
       input: <LlamaResponseInputItem>[
         LlamaResponseInputItem(
           role: 'user',
@@ -61,45 +64,41 @@ class QwenFoodVisionService {
     );
 
     final String raw = response.outputText.trim();
-    return _parseResponse(raw);
+    return parseResponse(raw);
   }
 
   String _buildPrompt() {
-    final String catalog = FoodDatabase.foods
-        .map((FoodItem food) => '${food.id} = ${food.name}')
-        .join('\n');
-
     return '''
-Anda adalah vision model lokal untuk aplikasi nutrisi Indonesia.
-Analisis HANYA makanan/minuman yang benar-benar terlihat pada foto. Jangan mengarang objek.
+Identify the food actually visible in this photo. Write food names in English.
+Use a regional dish name only if you know it; never invent or translate a name
+into an unrelated dish. A precise descriptive name is better than a wrong name.
+Describe the visible evidence BEFORE deciding the dish name: color, shape,
+texture, wrapper and visible filling. Distinguish soft rolled crepes and cakes
+from dry baked cookies, and filled wrappers from solid fried protein. Do not invent ingredients
+that are not visible. Identify the prepared dish, not separate ingredients inside it.
+Do not classify by color alone. Ignore decorative leaves, plates and backgrounds.
+If the exact dish is uncertain, use a short visual description as observed_name
+and meal_name instead of guessing. The name must agree with the visual evidence.
+Do not choose a substitute food. No nutrition values, recipes or food IDs.
 
-Pilih food_id PALING DEKAT dari katalog lokal berikut:
-$catalog
-
-Tugas cepat:
-1. Identifikasi maksimal 4 komponen makanan utama yang terlihat.
-2. Estimasikan gram secara konservatif dari foto 2D.
-3. Jika tidak yakin, gunakan porsi umum dan turunkan confidence.
-4. Buat nama hidangan singkat.
-
-Balas HANYA JSON valid tanpa markdown dengan schema tepat ini:
+Return ONLY valid JSON without markdown, with up to four distinct foods:
 {
-  "meal_name": "string",
   "foods": [
     {
-      "food_id": "id_dari_katalog",
-      "observed_name": "nama yang terlihat",
+      "visual_evidence": "one sentence of visible features supporting this identification",
+      "observed_name": "specific dish name or visual description",
       "estimated_grams": 120,
-      "confidence": 0.82
+      "confidence": 0.5
     }
-  ]
+  ],
+  "meal_name": "specific dish name or visual description"
 }
-
-Aturan: confidence 0.0 sampai 1.0. Jangan menjelaskan. Jangan membuat resep. Jangan memberi nilai nutrisi.
+Use your own estimates, not the example values. If there is no food, return foods: [].
 ''';
   }
 
-  QwenVisionResult _parseResponse(String raw) {
+  /// Resolves independently identified names against the local nutrition catalog.
+  QwenVisionResult parseResponse(String raw) {
     final String jsonText = _extractJson(raw);
     final dynamic decoded = jsonDecode(jsonText);
     if (decoded is! Map<String, dynamic>) {
@@ -107,22 +106,27 @@ Aturan: confidence 0.0 sampai 1.0. Jangan menjelaskan. Jangan membuat resep. Jan
     }
 
     final List<DetectedFood> items = <DetectedFood>[];
+    final Set<String> unmatchedFoods = <String>{};
     final Set<String> usedIds = <String>{};
     final dynamic foodsValue = decoded['foods'];
     if (foodsValue is List<dynamic>) {
       for (final dynamic row in foodsValue.take(4)) {
         if (row is! Map<String, dynamic>) continue;
-        final String foodId = (row['food_id'] ?? '').toString().trim();
         final String observedName = (row['observed_name'] ?? '').toString().trim();
-        FoodItem? food = FoodDatabase.byId(foodId);
-        food ??= FoodDatabase.matchLabel(observedName);
-        if (food == null || usedIds.contains(food.id)) continue;
+        if (observedName.isEmpty) continue;
+        // Never trust a generated food_id over what the model says it observed.
+        final FoodItem? food = FoodDatabase.matchLabel(observedName);
+        if (food == null) {
+          unmatchedFoods.add(observedName);
+          continue;
+        }
+        if (usedIds.contains(food.id)) continue;
 
-        final num? gramValue = row['estimated_grams'] as num?;
+        final num? gramValue = _finiteNumber(row['estimated_grams']);
         final double grams = (gramValue?.toDouble() ?? food.defaultGrams)
             .clamp(10.0, 1000.0)
             .toDouble();
-        final num? confidenceValue = row['confidence'] as num?;
+        final num? confidenceValue = _finiteNumber(row['confidence']);
         final double confidence = (confidenceValue?.toDouble() ?? 0.5)
             .clamp(0.0, 1.0)
             .toDouble();
@@ -157,10 +161,16 @@ Aturan: confidence 0.0 sampai 1.0. Jangan menjelaskan. Jangan membuat resep. Jan
     final String mealName = (decoded['meal_name'] ?? '').toString().trim();
     return QwenVisionResult(
       items: items,
+      unmatchedFoods: unmatchedFoods.toList(),
       rawResponse: raw,
       mealName: mealName.isEmpty ? null : mealName,
       recipe: recipe,
     );
+  }
+
+  num? _finiteNumber(dynamic value) {
+    final num? number = value is num ? value : num.tryParse('$value');
+    return number != null && number.isFinite ? number : null;
   }
 
   List<String> _stringList(dynamic value) {

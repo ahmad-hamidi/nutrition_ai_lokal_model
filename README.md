@@ -151,18 +151,34 @@ lib/screens/home_screen.dart                  # UI setup model + scanner
 ```
 
 
-## Fast CPU mode (1.2.1)
+## Bounded on-device inference
 
-The initial image scan is intentionally optimized for Android CPU inference:
-- input images are resized to a maximum of 640 x 640 at 75% JPEG quality;
+The image scan balances image detail with bounded Android memory use:
+- input images are resized to a maximum of 1024 x 1024 at 85% JPEG quality;
 - the first Qwen pass returns only meal name + up to four food components;
 - recipe generation is not requested during the vision pass; the UI falls back to the local recipe database;
 - the Qwen client instance is retained so subsequent scans can reuse the loaded runtime where supported.
 
-Inference uses a 4,096-token context, at most 512 image tokens, and at most
+Inference uses a 4,096-token context, at most 1,024 image tokens, and at most
 1,024 output tokens. Keep the context explicit: this GGUF declares a
 262,144-token training context, and `lib_llama_cpp` uses that value when
 `contextSize` is omitted. Allocating the full context caused Android to kill
 the app for low memory even on the 16 GB emulator.
 
 This reduces vision-prefill and output-generation work. For a larger speedup on supported devices, use a Vulkan-enabled Android llama.cpp build rather than the CPU-only native library distributed through the default pub.dev Android package.
+
+### Food identification and catalog matching
+
+The vision prompt identifies dishes without a catalog or generated food IDs.
+It requests English names (or a known regional name) and uses a visual description
+when the exact dish is unknown, to avoid forcing an incorrect localized name.
+The app then matches the observed name to an exact, unique catalog name or alias;
+ambiguous categories and substring matches are rejected. Unmatched dishes remain
+visible with nutrition unavailable. Mixed meals show partial nutrition for the
+matched items only, including a partial label in saved history. Model confidence
+is not displayed as an accuracy percentage.
+
+The local catalog does not yet include every Indonesian dish (including dadar
+gulung). Such dishes must not inherit nutrition from a different food. The 2B
+model can still misidentify images; this change prevents forced catalog mappings,
+not all visual recognition errors.

@@ -8,33 +8,22 @@ import 'package:path_provider/path_provider.dart';
 /// Menormalisasi foto hasil [image_picker] ke JPEG agar perilaku konsisten
 /// di semua format.
 ///
-/// Masalah yang diatasi: plugin `image_picker` Android hanya menerapkan
-/// `maxWidth`/`imageQuality` untuk JPEG. Untuk PNG ia hanya log
-/// "compressing is not supported for type PNG" dan mengembalikan file
-/// original yang bisa sangat besar. Fungsi ini melakukan resize + encode
-/// JPEG secara manual sehingga PNG pun ikut dikompres sebelum dikirim
-/// ke model.
-///
-/// Default mengikuti Fast CPU mode: maksimal 640 px, kualitas 75.
+/// Resize dan encode JPEG juga dilakukan untuk PNG karena imageQuality
+/// pada image_picker tidak menerapkan kompresi kualitas JPEG ke PNG.
 Future<String> normalizeFoodPhoto(
   XFile file, {
-  int maxWidth = 640,
-  int quality = 75,
+  int maxWidth = 1024,
+  int quality = 85,
 }) async {
-  final String lower = file.path.toLowerCase();
-  // Jalur cepat: JPEG kecil sudah cukup, pakai langsung.
-  if ((lower.endsWith('.jpg') || lower.endsWith('.jpeg')) &&
-      await File(file.path).length() <= 1024 * 1024) {
-    return file.path;
-  }
-
   final List<int> bytes = await file.readAsBytes();
   final img.Image? decoded = img.decodeImage(Uint8List.fromList(bytes));
   if (decoded == null) return file.path;
 
   img.Image processed = decoded;
-  if (decoded.width > maxWidth) {
-    processed = img.copyResize(decoded, width: maxWidth);
+  if (decoded.width > maxWidth || decoded.height > maxWidth) {
+    processed = decoded.width >= decoded.height
+        ? img.copyResize(decoded, width: maxWidth)
+        : img.copyResize(decoded, height: maxWidth);
   }
 
   final List<int> jpg = img.encodeJpg(processed, quality: quality);

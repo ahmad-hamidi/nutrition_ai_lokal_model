@@ -1,3 +1,4 @@
+import '../widgets/unmatched_foods_card.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -210,20 +211,20 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final XFile? file = await _picker.pickImage(
         source: source,
-        imageQuality: 75,
-        maxWidth: 640,
-        maxHeight: 640,
+        imageQuality: 85,
+        maxWidth: 1024,
+        maxHeight: 1024,
       );
       if (file == null) return;
 
       if (mounted) setState(() => _stage = 'Menyiapkan foto...');
       final String photoPath = await normalizeFoodPhoto(
         file,
-        maxWidth: 640,
-        quality: 75,
+        maxWidth: 1024,
+        quality: 85,
       );
 
-      if (mounted) setState(() => _stage = 'Mode cepat: Qwen3-VL menganalisis foto 640 px di perangkat...');
+      if (mounted) setState(() => _stage = 'Qwen3-VL sedang mengenali makanan di perangkat...');
       final QwenVisionResult result = await _vision.analyze(
         imagePath: photoPath,
         modelPath: _modelStatus.modelPath!,
@@ -233,6 +234,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final MealAnalysis analysis = MealAnalysis(
         imagePath: photoPath,
         items: result.items,
+        unmatchedFoods: result.unmatchedFoods,
         rawModelOutput: result.rawResponse,
         mealName: result.mealName,
         recipe: result.recipe,
@@ -348,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen> {
               controller: controller,
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
               itemCount: rows.length,
-              separatorBuilder: (_, __) => const Divider(),
+              separatorBuilder: (_, _) => const Divider(),
               itemBuilder: (BuildContext context, int index) {
                 final Map<String, dynamic> row = rows[index];
                 final List<dynamic> foods = row['foods'] as List<dynamic>? ?? <dynamic>[];
@@ -356,6 +358,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   contentPadding: EdgeInsets.zero,
                   title: Text(foods.join(', ')),
                   subtitle: Text(
+                    '${(row['unmatchedFoods'] as List<dynamic>? ?? []).isNotEmpty ? 'Parsial • ' : ''}'
                     '${(row['protein'] as num).toStringAsFixed(1)} g protein • '
                     '${(row['calories'] as num).round()} kcal',
                   ),
@@ -433,9 +436,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                 ),
-              if (analysis.items.isEmpty)
-                _NoFoodCard(onAdd: _addFood)
-              else ...<Widget>[
+              if (analysis.unmatchedFoods.isNotEmpty)
+                UnmatchedFoodsCard(names: analysis.unmatchedFoods),
+              if (analysis.items.isEmpty && analysis.unmatchedFoods.isEmpty)
+                _NoFoodCard(onAdd: _addFood),
+              if (analysis.items.isNotEmpty) ...<Widget>[
+                if (analysis.unmatchedFoods.isNotEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Text('Nutrisi parsial: hanya makanan yang cocok dengan database.'),
+                  ),
                 NutritionCard(
                   calories: analysis.calories,
                   protein: analysis.protein,
@@ -883,7 +893,7 @@ class _FoodEditor extends StatelessWidget {
                       Text(
                         item.sourceLabel == 'manual'
                             ? 'Ditambahkan manual'
-                            : 'Qwen: ${item.sourceLabel} • ${(item.confidence * 100).round()}%',
+                            : 'Perkiraan Qwen: ${item.sourceLabel} • perlu diperiksa',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],

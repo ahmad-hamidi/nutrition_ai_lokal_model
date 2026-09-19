@@ -16,6 +16,7 @@ class HistoryService {
       'protein': analysis.protein,
       'carbs': analysis.carbs,
       'fat': analysis.fat,
+      'unmatchedFoods': analysis.unmatchedFoods,
       'foods': analysis.items.map((item) => item.food.name).toList(),
     };
     rows.insert(0, jsonEncode(row));

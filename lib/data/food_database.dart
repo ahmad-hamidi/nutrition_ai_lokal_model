@@ -366,16 +366,26 @@ class FoodDatabase {
   }
 
   static FoodItem? matchLabel(String label) {
-    final String normalized = label.trim().toLowerCase();
+    final String normalized = _normalize(label);
     if (normalized.isEmpty) return null;
-    for (final FoodItem food in foods) {
-      final List<String> candidates = <String>[food.name.toLowerCase(), ...food.aliases];
-      for (final String alias in candidates) {
-        if (normalized == alias || normalized.contains(alias) || alias.contains(normalized)) {
-          return food;
-        }
-      }
-    }
-    return null;
+    // Generic categories cannot establish a specific preparation or nutrition.
+    const genericLabels = <String>{
+      'grain', 'poultry', 'barbecue', 'meat', 'seafood', 'soy', 'soybean',
+      'fried food', 'leaf', 'plant', 'greens', 'bakery', 'fruit', 'fast food',
+      'chicken', 'ayam', 'egg', 'telur', 'beef', 'fish', 'ikan',
+      'tempeh', 'tempe', 'tofu', 'tahu', 'grilled meat', 'sandwich',
+      'french fries', 'fries', 'pasta', 'ramen', 'stew', 'broth',
+    };
+    if (genericLabels.contains(normalized)) return null;
+    final matches = foods.where((food) {
+      return <String>[food.name, ...food.aliases]
+          .any((alias) => _normalize(alias) == normalized);
+    }).toList();
+    // Exact, unique matches only: "mi" must not match a word inside a cake name.
+    return matches.length == 1 ? matches.single : null;
   }
+
+  static String _normalize(String value) => value.trim().toLowerCase()
+      .replaceAll(RegExp(r'[-_]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ');
 }
