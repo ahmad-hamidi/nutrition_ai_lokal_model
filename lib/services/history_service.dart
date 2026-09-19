@@ -16,6 +16,9 @@ class HistoryService {
       'protein': analysis.protein,
       'carbs': analysis.carbs,
       'fat': analysis.fat,
+      'fiber': analysis.fiber,
+      'sugar': analysis.sugar,
+      'sodiumMg': analysis.sodiumMg,
       'unmatchedFoods': analysis.unmatchedFoods,
       'foods': analysis.items.map((item) => item.food.name).toList(),
     };

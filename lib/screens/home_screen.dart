@@ -6,11 +6,14 @@ import 'package:image_picker/image_picker.dart';
 
 import '../data/food_database.dart';
 import '../models/food.dart';
+import '../models/food_vision_result.dart';
 import '../models/meal_analysis.dart';
+import '../services/gemma_food_vision_service.dart';
 import '../services/history_service.dart';
 import '../services/image_preprocess.dart';
 import '../services/local_model_manager.dart';
 import '../services/qwen_food_vision_service.dart';
+import 'weekly_plan_screen.dart';
 import '../widgets/nutrition_card.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -23,7 +26,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final ImagePicker _picker = ImagePicker();
   final LocalModelManager _models = LocalModelManager();
-  final QwenFoodVisionService _vision = QwenFoodVisionService();
+  final QwenFoodVisionService _qwenVision = QwenFoodVisionService();
+  final GemmaFoodVisionService _gemmaVision = GemmaFoodVisionService();
   final HistoryService _history = HistoryService();
 
   LocalModelStatus _modelStatus = const LocalModelStatus();
@@ -50,12 +54,57 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  @override
+  void dispose() {
+    _gemmaVision.dispose();
+    super.dispose();
+  }
+
+  Future<void> _selectModel(LocalAiModel model) async {
+    final LocalModelStatus status = await _models.selectModel(model);
+    if (!mounted) return;
+    setState(() {
+      _modelStatus = status;
+      _analysis = null;
+      _error = null;
+    });
+  }
+
+  Future<void> _importGemmaModel() async {
+    setState(() {
+      _error = null;
+      _importing = true;
+      _importProgress = 0;
+      _stage = 'Mengimpor Gemma 3n E2B LiteRT-LM...';
+    });
+    try {
+      await _gemmaVision.dispose();
+      final LocalModelStatus status = await _models.importGemmaModel(
+        onProgress: (double value) {
+          if (mounted) setState(() => _importProgress = value);
+        },
+      );
+      if (!mounted) return;
+      setState(() => _modelStatus = status);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'Impor Gemma 3n gagal: $error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _importing = false;
+          _stage = null;
+        });
+      }
+    }
+  }
+
   Future<void> _importModel({required bool projector}) async {
     setState(() {
       _error = null;
       _importing = true;
       _importProgress = 0;
-      _stage = projector ? 'Menyalin vision projector...' : 'Menyalin Qwen3-VL Q4...';
+      _stage = projector ? 'Memeriksa file vision projector...' : 'Memeriksa file Qwen3-VL Q4...';
     });
     try {
       final LocalModelStatus status = projector
@@ -176,6 +225,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _stage = 'Menghapus model lokal...';
     });
     try {
+      await _gemmaVision.dispose();
       await _models.clear();
       final LocalModelStatus status = await _models.getStatus();
       if (!mounted) return;
@@ -198,7 +248,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _pick(ImageSource source) async {
     if (!_modelStatus.ready) {
-      setState(() => _error = 'Download atau impor model Q4 dan vision projector terlebih dahulu.');
+      final String requirement = _modelStatus.selectedModel == LocalAiModel.qwen3Vl
+          ? 'Download atau impor Qwen Q4 + vision projector terlebih dahulu.'
+          : 'Impor model Gemma 3n E2B .litertlm terlebih dahulu.';
+      setState(() => _error = requirement);
       return;
     }
 
@@ -224,12 +277,24 @@ class _HomeScreenState extends State<HomeScreen> {
         quality: 85,
       );
 
-      if (mounted) setState(() => _stage = 'Qwen3-VL sedang mengenali makanan di perangkat...');
-      final QwenVisionResult result = await _vision.analyze(
-        imagePath: photoPath,
-        modelPath: _modelStatus.modelPath!,
-        mmprojPath: _modelStatus.mmprojPath!,
-      );
+      final FoodVisionResult result;
+      if (_modelStatus.selectedModel == LocalAiModel.gemma3nE2b) {
+        if (mounted) {
+          setState(() => _stage = 'Gemma 3n E2B menganalisis foto secara lokal...');
+        }
+        result = await _gemmaVision.analyze(
+          imagePath: photoPath, modelPath: _modelStatus.gemmaPath!,
+        );
+      } else {
+        if (mounted) {
+          setState(() => _stage = 'Qwen3-VL sedang mengenali makanan di perangkat...');
+        }
+        result = await _qwenVision.analyze(
+          imagePath: photoPath,
+          modelPath: _modelStatus.modelPath!,
+          mmprojPath: _modelStatus.mmprojPath!,
+        );
+      }
 
       final MealAnalysis analysis = MealAnalysis(
         imagePath: photoPath,
@@ -244,7 +309,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = 'Analisis Qwen3-VL gagal: $error';
+        _error = 'Analisis ${_modelStatus.selectedModel.label} gagal: $error';
       });
     } finally {
       if (mounted) {
@@ -383,8 +448,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final MealAnalysis? analysis = _analysis;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('NutriLens Qwen Offline'),
+        title: const Text('NutriLens Offline AI'),
         actions: <Widget>[
+          IconButton(
+            tooltip: 'Menu 7 hari',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const WeeklyPlanScreen()),
+            ),
+            icon: const Icon(Icons.calendar_month_outlined),
+          ),
           IconButton(
             tooltip: 'Riwayat',
             onPressed: _showHistory,
@@ -396,9 +468,11 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: <Widget>[
-            const _OfflineBanner(),
+            _OfflineBanner(selectedModel: _modelStatus.selectedModel),
             const SizedBox(height: 12),
-            _ModelSetupCard(
+            AbsorbPointer(
+              absorbing: _loading,
+              child: _ModelSetupCard(
               status: _modelStatus,
               checking: _checkingModel,
               importing: _importing,
@@ -408,7 +482,10 @@ class _HomeScreenState extends State<HomeScreen> {
               onDownloadProjector: () => _downloadModel(projector: true),
               onImportModel: () => _importModel(projector: false),
               onImportProjector: () => _importModel(projector: true),
+              onImportGemma: _importGemmaModel,
+              onSelectModel: _selectModel,
               onClear: _clearModels,
+              ),
             ),
             if (_stage != null) ...<Widget>[
               const SizedBox(height: 12),
@@ -451,6 +528,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   protein: analysis.protein,
                   carbs: analysis.carbs,
                   fat: analysis.fat,
+                  fiber: analysis.fiber,
+                  sugar: analysis.sugar,
+                  saturatedFat: analysis.saturatedFat,
+                  sodiumMg: analysis.sodiumMg,
+                  cholesterolMg: analysis.cholesterolMg,
+                  potassiumMg: analysis.potassiumMg,
                 ),
                 const SizedBox(height: 12),
                 _DetectedFoodsCard(
@@ -469,11 +552,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
               const SizedBox(height: 12),
-              _RawOutputCard(raw: analysis.rawModelOutput),
+              _RawOutputCard(raw: analysis.rawModelOutput, modelName: _modelStatus.selectedModel.label),
             ],
             const SizedBox(height: 24),
             Text(
-              'Catatan: Qwen3-VL memperkirakan jenis dan porsi dari foto 2D. Angka kalori/protein dihitung ulang dari database lokal, bukan dari tebakan LLM. Koreksi jenis makanan dan gram sebelum menggunakan hasil.',
+              'Catatan: model AI memperkirakan jenis dan porsi dari foto 2D. Semua nutrisi dihitung ulang dari database lokal dan tetap berupa estimasi. Koreksi jenis makanan dan gram sebelum menggunakan hasil.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -484,25 +567,26 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _OfflineBanner extends StatelessWidget {
-  const _OfflineBanner();
+  const _OfflineBanner({required this.selectedModel});
+
+  final LocalAiModel selectedModel;
 
   @override
   Widget build(BuildContext context) {
+    final String detail = selectedModel == LocalAiModel.gemma3nE2b
+        ? 'Gemma 3n E2B berjalan lokal melalui LiteRT-LM dengan dukungan vision GPU/CPU.'
+        : 'Qwen3-VL-2B Q4 + vision projector berjalan lokal melalui llama.cpp.';
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.secondaryContainer,
         borderRadius: BorderRadius.circular(16),
       ),
-      child: const Row(
+      child: Row(
         children: <Widget>[
-          Icon(Icons.memory_outlined),
-          SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'Qwen3-VL-2B Q4 + vision projector berjalan lokal melalui llama.cpp. Foto tidak dikirim ke server.',
-            ),
-          ),
+          const Icon(Icons.memory_outlined),
+          const SizedBox(width: 12),
+          Expanded(child: Text('$detail Foto tidak dikirim ke server.')),
         ],
       ),
     );
@@ -520,6 +604,8 @@ class _ModelSetupCard extends StatelessWidget {
     required this.onDownloadProjector,
     required this.onImportModel,
     required this.onImportProjector,
+    required this.onImportGemma,
+    required this.onSelectModel,
     required this.onClear,
   });
 
@@ -532,6 +618,8 @@ class _ModelSetupCard extends StatelessWidget {
   final VoidCallback onDownloadProjector;
   final VoidCallback onImportModel;
   final VoidCallback onImportProjector;
+  final VoidCallback onImportGemma;
+  final ValueChanged<LocalAiModel> onSelectModel;
   final VoidCallback onClear;
 
   @override
@@ -547,7 +635,7 @@ class _ModelSetupCard extends StatelessWidget {
                 const Icon(Icons.smart_toy_outlined),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text('Model lokal Qwen3-VL', style: Theme.of(context).textTheme.titleMedium),
+                  child: Text('Model AI lokal', style: Theme.of(context).textTheme.titleMedium),
                 ),
                 if (status.ready)
                   const Chip(
@@ -557,67 +645,60 @@ class _ModelSetupCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            const Text(
-              'Download langsung dari repo resmi Qwen atau impor file GGUF yang sudah Anda miliki.',
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Internet hanya diperlukan untuk download model. Setelah kedua model siap, analisis foto berjalan lokal/offline.',
-              style: Theme.of(context).textTheme.bodySmall,
+            SegmentedButton<LocalAiModel>(
+              segments: const <ButtonSegment<LocalAiModel>>[
+                ButtonSegment<LocalAiModel>(
+                  value: LocalAiModel.qwen3Vl,
+                  label: Text('Qwen3-VL'),
+                  icon: Icon(Icons.bolt_outlined),
+                ),
+                ButtonSegment<LocalAiModel>(
+                  value: LocalAiModel.gemma3nE2b,
+                  label: Text('Gemma 3n'),
+                  icon: Icon(Icons.auto_awesome_outlined),
+                ),
+              ],
+              selected: <LocalAiModel>{status.selectedModel},
+              onSelectionChanged: importing
+                  ? null
+                  : (Set<LocalAiModel> values) {
+                      if (values.isNotEmpty) onSelectModel(values.first);
+                    },
             ),
             const SizedBox(height: 12),
-            if (!status.ready)
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: importing || checking ? null : onDownloadAll,
-                  icon: const Icon(Icons.download_for_offline_outlined),
-                  label: const Text('Download Semua (~1,55 GB)'),
-                ),
+            if (status.selectedModel == LocalAiModel.qwen3Vl)
+              _QwenSetup(
+                status: status,
+                checking: checking,
+                importing: importing,
+                onDownloadAll: onDownloadAll,
+                onDownloadModel: onDownloadModel,
+                onDownloadProjector: onDownloadProjector,
+                onImportModel: onImportModel,
+                onImportProjector: onImportProjector,
+              )
+            else
+              _GemmaSetup(
+                ready: status.gemmaReady,
+                importing: importing,
+                onImport: onImportGemma,
               ),
-            if (!status.ready) ...<Widget>[
-              const SizedBox(height: 6),
-              Text(
-                'Disarankan Wi-Fi dan ruang kosong minimal 2 GB. Download parsial akan disimpan untuk dicoba lanjutkan jika koneksi terputus.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 10),
-            ],
-            _ModelFileRow(
-              title: LocalModelManager.languageModelFileName,
-              subtitle: 'Language model Q4_K_M • sekitar 1,11 GB',
-              ready: status.modelReady,
-              checking: checking,
-              busy: importing,
-              onDownload: onDownloadModel,
-              onImport: onImportModel,
-            ),
-            const Divider(),
-            _ModelFileRow(
-              title: LocalModelManager.visionProjectorFileName,
-              subtitle: 'Vision projector Q8_0 • sekitar 445 MB',
-              ready: status.projectorReady,
-              checking: checking,
-              busy: importing,
-              onDownload: onDownloadProjector,
-              onImport: onImportProjector,
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('Impor Android memakai file asli tanpa salinan. Jangan pindahkan atau hapus file sumber. Melepas model impor tidak menghapus file asli.'),
             ),
             if (importing) ...<Widget>[
               const SizedBox(height: 12),
               LinearProgressIndicator(value: progress > 0 ? progress : null),
               const SizedBox(height: 6),
-              Text(
-                progress > 0
-                    ? '${(progress * 100).clamp(0, 100).round()}%'
-                    : 'Menghubungkan ke server model...',
-              ),
+              Text(progress > 0 ? '${(progress * 100).clamp(0, 100).round()}%' : 'Memproses model...'),
             ],
-            if (status.ready) ...<Widget>[
+            if (status.qwenReady || status.gemmaReady) ...<Widget>[
               const SizedBox(height: 8),
               TextButton.icon(
                 onPressed: importing ? null : onClear,
                 icon: const Icon(Icons.delete_outline),
-                label: const Text('Hapus model lokal'),
+                label: const Text('Lepas model / hapus unduhan'),
               ),
             ],
             if (status.error != null) ...<Widget>[
@@ -627,6 +708,123 @@ class _ModelSetupCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _QwenSetup extends StatelessWidget {
+  const _QwenSetup({
+    required this.status,
+    required this.checking,
+    required this.importing,
+    required this.onDownloadAll,
+    required this.onDownloadModel,
+    required this.onDownloadProjector,
+    required this.onImportModel,
+    required this.onImportProjector,
+  });
+
+  final LocalModelStatus status;
+  final bool checking;
+  final bool importing;
+  final VoidCallback onDownloadAll;
+  final VoidCallback onDownloadModel;
+  final VoidCallback onDownloadProjector;
+  final VoidCallback onImportModel;
+  final VoidCallback onImportProjector;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        const Text('Qwen3-VL memakai GGUF Q4 + vision projector.'),
+        const SizedBox(height: 8),
+        if (!status.qwenReady)
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: importing || checking ? null : onDownloadAll,
+              icon: const Icon(Icons.download_for_offline_outlined),
+              label: const Text('Download Qwen (~1,55 GB)'),
+            ),
+          ),
+        const SizedBox(height: 8),
+        _ModelFileRow(
+          title: LocalModelManager.languageModelFileName,
+          subtitle: 'Language model Q4_K_M • sekitar 1,11 GB',
+          ready: status.modelReady,
+          checking: checking,
+          busy: importing,
+          onDownload: onDownloadModel,
+          onImport: onImportModel,
+        ),
+        const Divider(),
+        _ModelFileRow(
+          title: LocalModelManager.visionProjectorFileName,
+          subtitle: 'Vision projector Q8_0 • sekitar 445 MB',
+          ready: status.projectorReady,
+          checking: checking,
+          busy: importing,
+          onDownload: onDownloadProjector,
+          onImport: onImportProjector,
+        ),
+      ],
+    );
+  }
+}
+
+class _GemmaSetup extends StatelessWidget {
+  const _GemmaSetup({
+    required this.ready,
+    required this.importing,
+    required this.onImport,
+  });
+
+  final bool ready;
+  final bool importing;
+  final VoidCallback onImport;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          'Gemma 3n E2B vision memakai format LiteRT-LM (.litertlm). Pilih file Gemma 3n E2B multimodal yang sudah Anda unduh.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Model resmi Google di Hugging Face bersifat gated, jadi aplikasi tidak menyimpan token akun Anda. Impor file setelah Anda menerima lisensinya.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: <Widget>[
+            Icon(ready ? Icons.check_circle : Icons.description_outlined),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text(LocalModelManager.gemmaModelFileName),
+                  Text('Gemma 3n E2B • vision + text • LiteRT-LM', style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.tonalIcon(
+            onPressed: importing ? null : onImport,
+            icon: const Icon(Icons.folder_open_outlined),
+            label: Text(ready ? 'Impor Gemma pengganti' : 'Impor Gemma 3n E2B'),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -769,7 +967,7 @@ class _PhotoPanel extends StatelessWidget {
                         children: <Widget>[
                           const Icon(Icons.restaurant_menu, size: 64),
                           const SizedBox(height: 10),
-                          Text(enabled ? 'Foto makanan untuk Qwen3-VL' : 'Download atau impor model terlebih dahulu'),
+                          Text(enabled ? 'Foto makanan untuk AI lokal' : 'Download atau impor model terlebih dahulu'),
                         ],
                       ),
                     ),
@@ -893,7 +1091,7 @@ class _FoodEditor extends StatelessWidget {
                       Text(
                         item.sourceLabel == 'manual'
                             ? 'Ditambahkan manual'
-                            : 'Perkiraan Qwen: ${item.sourceLabel} • perlu diperiksa',
+                            : 'Perkiraan AI: ${item.sourceLabel} • perlu diperiksa',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -953,7 +1151,8 @@ class _RecipeCard extends StatelessWidget {
     final RecipeSuggestion? aiRecipe = analysis.recipe;
     final FoodItem? fallback = analysis.items.isEmpty ? null : analysis.items.first.food;
     final String title = aiRecipe?.title ?? fallback?.recipeTitle ?? 'Resep perkiraan';
-    final List<String> ingredients = aiRecipe?.ingredients ?? fallback?.ingredients ?? <String>[];
+    final List<String> ingredients = aiRecipe?.ingredients ??
+        analysis.items.expand((DetectedFood item) => item.food.ingredients).toSet().take(16).toList();
     final List<String> steps = aiRecipe?.steps ?? fallback?.steps ?? <String>[];
 
     return Card(
@@ -979,16 +1178,17 @@ class _RecipeCard extends StatelessWidget {
 }
 
 class _RawOutputCard extends StatelessWidget {
-  const _RawOutputCard({required this.raw});
+  const _RawOutputCard({required this.raw, required this.modelName});
 
   final String raw;
+  final String modelName;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       child: ExpansionTile(
         leading: const Icon(Icons.data_object),
-        title: const Text('Output mentah Qwen3-VL'),
+        title: Text('Output mentah $modelName'),
         subtitle: const Text('Untuk debugging / benchmark'),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         children: <Widget>[
@@ -1011,7 +1211,7 @@ class _NoFoodCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: <Widget>[
-            const Text('Qwen tidak menemukan item yang cocok dengan database nutrisi lokal.'),
+            const Text('AI tidak menemukan item yang cocok dengan database nutrisi lokal.'),
             const SizedBox(height: 8),
             OutlinedButton.icon(onPressed: onAdd, icon: const Icon(Icons.add), label: const Text('Tambah manual')),
           ],

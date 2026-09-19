@@ -12,5 +12,5 @@ android/local.properties
 .DS_Store
 
 # Local AI model weights (large files)
-models/
+/models/
 *.gguf

@@ -1,29 +1,23 @@
-# NutriLens Qwen Offline
+# NutriLens Offline AI
 
-Flutter Android MVP untuk foto makanan -> Qwen3-VL lokal -> identifikasi komponen -> estimasi porsi -> perhitungan nutrisi lokal -> resep perkiraan. Tidak ada API cloud untuk inference.
+Flutter Android MVP untuk foto makanan -> AI vision lokal -> identifikasi komponen -> estimasi porsi -> perhitungan nutrisi lokal -> resep. Aplikasi mendukung dua runtime AI yang dapat dipilih pengguna: Qwen3-VL-2B Q4 dan Gemma 3n E2B LiteRT-LM.
 
 ## Stack
 
 - Flutter >= 3.44.0 / Dart >= 3.12.0
-- `lib_llama_cpp` 0.7.3 (llama.cpp multimodal / mtmd)
-- Qwen3-VL-2B-Instruct GGUF
-- `Qwen3VL-2B-Instruct-Q4_K_M.gguf` sebagai language model
-- `mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf` sebagai vision projector
-- `file_picker` 10.3.10 untuk impor GGUF
-- `dart:io` untuk download model langsung dengan progress/resume
-- `crypto` untuk verifikasi SHA-256 setelah download/import
-- `image_picker` 1.2.3 untuk kamera/galeri
-- `path_provider` 2.1.6 untuk storage privat aplikasi
-- `shared_preferences` 2.5.5 untuk metadata model dan riwayat
-- Database nutrisi seed lokal di Dart
+- Qwen3-VL-2B-Instruct Q4 melalui `lib_llama_cpp` + llama.cpp multimodal
+- Gemma 3n E2B multimodal melalui `flutter_gemma` + `flutter_gemma_litertlm`
+- `file_picker` untuk import GGUF / LiteRT-LM
+- `image_picker` untuk kamera/galeri
+- `path_provider` untuk storage privat aplikasi
+- `shared_preferences` untuk metadata model dan riwayat
+- database nutrisi seed lokal + kalkulasi deterministik
 
-## Model resmi yang diperlukan
+## Pilihan model lokal
 
-Repo resmi:
+### Qwen3-VL-2B-Instruct Q4
 
-https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF
-
-Download dua file berikut:
+Qwen tetap memakai dua file:
 
 1. `Qwen3VL-2B-Instruct-Q4_K_M.gguf` (~1.11 GB)
 2. `mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf` (~445 MB)
@@ -38,68 +32,112 @@ mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf
 f9a68fabba69c3b81e153367b2c7521030b0fa8bb0de400c9599c8e6725f9c82
 ```
 
-Total sekitar 1.55 GB. Model tidak dimasukkan ke APK agar APK tetap kecil dan agar pengguna dapat mengganti model tanpa rebuild.
+Aplikasi dapat mengunduh keduanya langsung dari repository resmi Qwen atau mengimpornya dari storage. SHA-256 tetap diverifikasi sebelum file dianggap siap. Download memakai resume HTTP Range dengan file parsial `.part`.
 
-Aplikasi menyediakan dua cara setup model:
+### Gemma 3n E2B
 
-- **Download Semua (~1,55 GB)** langsung dari repository resmi `Qwen/Qwen3-VL-2B-Instruct-GGUF`.
-- **Import** file `.gguf` yang sudah dimiliki pengguna.
+Gunakan file multimodal LiteRT-LM:
 
-Download disimpan ke storage privat aplikasi. File parsial memakai ekstensi `.part`; jika koneksi terputus, percobaan berikutnya mencoba melanjutkan download menggunakan HTTP Range. Setelah file selesai, SHA-256 diverifikasi sebelum model ditandai siap.
-
-Pada macOS/Linux Anda juga dapat memakai helper:
-
-```bash
-./scripts/download_qwen3vl_models.sh
+```text
+gemma-3n-E2B-it-int4.litertlm
 ```
 
-Script menggunakan resume download dan memverifikasi SHA-256 resmi.
+Pilih tab **Gemma 3n** pada kartu Model AI lokal lalu tekan **Impor Gemma 3n E2B**. File disalin ke storage privat aplikasi dan didaftarkan ke runtime LiteRT-LM. Inference mencoba GPU untuk decoder dan vision encoder, lalu fallback ke CPU jika backend GPU tidak tersedia.
 
-## Alur pertama kali
-
-1. Install APK dan buka NutriLens.
-2. Pilih **Download Semua (~1,55 GB)** untuk mengambil kedua model resmi langsung dari Qwen/Hugging Face. Disarankan Wi-Fi dan ruang kosong minimal 2 GB.
-3. Alternatif: tekan **Import** pada masing-masing model jika file GGUF sudah tersedia di penyimpanan perangkat.
-4. App menyimpan kedua file ke storage privat dan memverifikasi SHA-256.
-5. Setelah language model dan vision projector berstatus **Siap**, kamera/galeri aktif.
-6. Sesudah setup model, inference foto berjalan lokal dan dapat digunakan tanpa internet.
+Model resmi Gemma di Hugging Face memerlukan persetujuan lisensi Google sebelum file dapat diakses. Karena itu build ini tidak meminta atau menyimpan token Hugging Face; pengguna mengunduh model dengan akunnya sendiri lalu mengimpor `.litertlm`.
 
 ## Pipeline
 
 ```text
 Camera / Gallery
+      +---- Qwen3-VL GGUF + mmproj / llama.cpp
       |
-      v
-Qwen3-VL-2B Q4 + mmproj Q8
+      +---- Gemma 3n E2B .litertlm / LiteRT-LM
       |
       v
 Structured JSON
-(food_id, observed_name, grams, confidence, recipe)
-      |
-      +----------------------+
-      |                      |
-      v                      v
-Local nutrition DB       Recipe UI
+(food_id, observed_name, grams, confidence)
       |
       v
-Deterministic calories / protein / carbs / fat
+Local nutrition database
+      |
+      v
+Deterministic nutrition calculation
 ```
 
-Qwen tidak dipercaya untuk angka nutrisi final. Model hanya mengidentifikasi makanan dan memperkirakan porsi. Nilai nutrisi dihitung ulang dengan rumus database lokal per 100 gram.
+AI tidak dipercaya untuk angka nutrisi final. Model hanya mengidentifikasi makanan dan memperkirakan porsi. Semua nilai nutrisi dihitung ulang dari data per 100 gram.
+
+## Nutrisi yang ditampilkan
+
+Scanner sekarang menghitung dan menampilkan:
+
+- energi/kalori
+- protein
+- karbohidrat
+- lemak total
+- lemak jenuh
+- serat
+- gula
+- natrium
+- kolesterol
+- kalium
+
+Nilainya tetap estimasi karena identifikasi dan gram berasal dari foto 2D. Database saat ini adalah seed lokal untuk MVP; sebelum penggunaan production, audit/ganti angka dengan sumber seperti TKPI dan/atau USDA.
+
+## Ingredient dan resep
+
+Setiap item makanan di database dapat memiliki daftar ingredient dan langkah memasak. Setelah scan, kartu **Resep cepat lokal** menggabungkan ingredient dari komponen yang terdeteksi dan menyediakan langkah resep lokal tanpa menunggu generation AI tambahan.
+
+## Resep & menu 7 hari
+
+Ikon kalender di AppBar membuka **Resep & Menu 7 Hari**. Starter plan mencakup 7 hari x 3 waktu makan. Setiap hari menampilkan total kalori, protein, karbohidrat, lemak, serat, gula dan natrium. Setiap meal memiliki ingredient serta langkah memasak.
+
+Menu ini adalah contoh umum, bukan diet medis atau rekomendasi personal. Porsi perlu disesuaikan dengan kebutuhan energi, alergi, preferensi dan kondisi kesehatan pengguna.
+
+## Bounded on-device inference (Qwen)
+
+The image scan balances image detail with bounded Android memory use:
+
+- input images are resized to a maximum of 1024 x 1024 at 85% JPEG quality;
+- the first Qwen pass returns only meal name + up to four food components;
+- recipe generation is not requested during the vision pass; the UI falls back to the local recipe database;
+- the Qwen client instance is retained so subsequent scans can reuse the loaded runtime where supported.
+
+Inference uses a 4,096-token context, at most 1,024 image tokens, and at most
+1,024 output tokens. Keep the context explicit: this GGUF declares a
+262,144-token training context, and `lib_llama_cpp` uses that value when
+`contextSize` is omitted. Allocating the full context caused Android to kill
+the app for low memory even on the 16 GB emulator.
+
+### Food identification and catalog matching
+
+The vision prompt identifies dishes without a catalog or generated food IDs.
+It requests English names (or a known regional name) and uses a visual description
+when the exact dish is unknown, to avoid forcing an incorrect localized name.
+The app then matches the observed name to an exact, unique catalog name or alias;
+ambiguous categories and substring matches are rejected. Unmatched dishes remain
+visible with nutrition unavailable. Mixed meals show partial nutrition for the
+matched items only, including a partial label in saved history. Model confidence
+is not displayed as an accuracy percentage.
+
+The local catalog does not yet include every Indonesian dish (including dadar
+gulung). Such dishes must not inherit nutrition from a different food.
 
 ## Privacy / offline
 
-`AndroidManifest.xml` memiliki permission `INTERNET` hanya agar pengguna dapat memilih download model langsung dari repository resmi Qwen/Hugging Face. Permission ini tidak berarti inference menggunakan cloud. Foto diproses lokal melalui llama.cpp dan tidak dikirim ke server oleh pipeline aplikasi ini. Setelah kedua model tersimpan, pemindaian makanan dapat digunakan offline.
+Foto diproses di perangkat. Internet hanya diperlukan bila pengguna memilih fitur download Qwen. Setelah model tersedia di storage privat, scanner dapat berjalan offline. Gemma 3n pada build ini menggunakan flow import lokal dan tidak membutuhkan token cloud di aplikasi.
+
+## Performa
+
+Qwen memakai foto maksimum 1024x1024, output singkat maksimal empat komponen utama, dan tidak meminta recipe generation pada vision pass pertama.
+
+Gemma 3n E2B berukuran lebih besar daripada Qwen Q4 dan direkomendasikan untuk perangkat dengan RAM yang cukup. Runtime LiteRT-LM dikonfigurasi mencoba GPU terlebih dahulu untuk text decoder dan vision encoder, lalu CPU sebagai fallback.
+
+Q4 language model ~1.11 GB dan projector ~445 MB belum termasuk KV cache, image tensors, Flutter, dan overhead Android. Untuk penggunaan nyata, targetkan minimal 6 GB RAM; 8 GB+ lebih aman. Kecepatan sangat bergantung CPU/thermal HP.
 
 ## Android / ABI
 
 Build APK saat ini ditargetkan ke `arm64-v8a`, sesuai prebuilt Android CPU yang dipublikasikan oleh `lib_llama_cpp`. Ini cocok untuk mayoritas HP Android modern 64-bit. Emulator x86/x86_64 bukan target build ini.
-
-Runtime pub.dev `lib_llama_cpp` Android saat ini memakai CPU prebuilt. Akselerasi Vulkan dapat ditambahkan sebagai tahap optimisasi berikutnya menggunakan native library accelerator yang sesuai.
-
-## RAM yang disarankan
-
-Q4 language model ~1.11 GB dan projector ~445 MB belum termasuk KV cache, image tensors, Flutter, dan overhead Android. Untuk penggunaan nyata, targetkan minimal 6 GB RAM; 8 GB+ lebih aman. Kecepatan sangat bergantung CPU/thermal HP.
 
 ## Build lokal
 
@@ -121,64 +159,45 @@ build/app/outputs/flutter-apk/app-release.apk
 ```
 
 Project memakai Gradle 8.14 + AGP 8.11.1 dan tidak ditujukan untuk dijalankan dengan JDK 25.
+Project memakai Dart >= 3.12.0. Dependency Gemma yang ditambahkan adalah `flutter_gemma ^1.8.3` dan `flutter_gemma_litertlm ^1.6.4`.
 
 ## GitHub Actions
 
 `.github/workflows/build-apk.yml` memasang Temurin JDK 17 dan Flutter 3.44.0 lalu menjalankan analyze, test, dan release build.
 
-Artifact:
-
-```text
-NutriLens-Qwen3VL-Offline-APK
-```
-
 ## Batasan MVP
 
-- Estimasi gram dari foto 2D tidak dapat presisi; pengguna tetap bisa mengoreksi gram.
-- Database nutrisi saat ini adalah seed/demo. Untuk production, ganti/validasi dengan TKPI dan/atau USDA.
-- Prompt membatasi output ke katalog lokal supaya kalkulasi nutrisi selalu memiliki pasangan data. Tambahkan lebih banyak `FoodItem` untuk memperluas menu.
-- Resep dari Qwen adalah perkiraan berdasarkan foto, bukan rekonstruksi resep asli.
-- First inference bisa lebih lambat karena model harus dimuat ke memori.
+- Estimasi berat dari satu foto 2D tidak dapat presisi; pengguna tetap dapat mengoreksi gram.
+- Database nutrisi masih seed/demo dan harus diaudit sebelum dipakai sebagai sumber nutrisi production.
+- Starter menu 7 hari bersifat umum dan bukan meal plan klinis/personal.
+- Gemma 3n memerlukan file `.litertlm`; Qwen memakai `.gguf` + `mmproj`.
+- First inference dapat lebih lambat karena bobot model perlu dimuat ke memori.
 - APK release sementara memakai debug signing agar mudah dibuild. Untuk distribusi Play Store, ganti signing config dengan keystore release.
 
 ## File penting
 
 ```text
-lib/services/qwen_food_vision_service.dart   # inference Qwen3-VL + parsing JSON
-lib/services/local_model_manager.dart        # download/resume/import/verify model GGUF
-lib/data/food_database.dart                   # data nutrisi lokal
+lib/services/qwen_food_vision_service.dart    # inference Qwen3-VL
+lib/services/gemma_food_vision_service.dart   # inference Gemma 3n LiteRT-LM
+lib/services/local_model_manager.dart         # model selector/import/download
+lib/data/food_database.dart                   # nutrition + ingredient seed
+lib/data/weekly_meal_plan.dart                # menu dan resep 7 hari
+lib/screens/weekly_plan_screen.dart            # UI menu 7 hari
 lib/screens/home_screen.dart                  # UI setup model + scanner
+lib/widgets/nutrition_card.dart               # panel nutrisi lengkap
 ```
 
+### Android model imports without copies
 
-## Bounded on-device inference
+Android imports now use `ACTION_OPEN_DOCUMENT` with a persistent read grant.
+The app stores the document URI and reopens its read-only file descriptor after
+restart. A tiny app-owned symbolic link points to `/proc/self/fd/<descriptor>` so
+Qwen and LiteRT-LM can use their path-based loaders without copying model bytes.
+Gemma's `fromFile` API only registers that external path.
 
-The image scan balances image detail with bounded Android memory use:
-- input images are resized to a maximum of 1024 x 1024 at 85% JPEG quality;
-- the first Qwen pass returns only meal name + up to four food components;
-- recipe generation is not requested during the vision pass; the UI falls back to the local recipe database;
-- the Qwen client instance is retained so subsequent scans can reuse the loaded runtime where supported.
-
-Inference uses a 4,096-token context, at most 1,024 image tokens, and at most
-1,024 output tokens. Keep the context explicit: this GGUF declares a
-262,144-token training context, and `lib_llama_cpp` uses that value when
-`contextSize` is omitted. Allocating the full context caused Android to kill
-the app for low memory even on the 16 GB emulator.
-
-This reduces vision-prefill and output-generation work. For a larger speedup on supported devices, use a Vulkan-enabled Android llama.cpp build rather than the CPU-only native library distributed through the default pub.dev Android package.
-
-### Food identification and catalog matching
-
-The vision prompt identifies dishes without a catalog or generated food IDs.
-It requests English names (or a known regional name) and uses a visual description
-when the exact dish is unknown, to avoid forcing an incorrect localized name.
-The app then matches the observed name to an exact, unique catalog name or alias;
-ambiguous categories and substring matches are rejected. Unmatched dishes remain
-visible with nutrition unavailable. Mixed meals show partial nutrition for the
-matched items only, including a partial label in saved history. Model confidence
-is not displayed as an accuracy percentage.
-
-The local catalog does not yet include every Indonesian dish (including dadar
-gulung). Such dishes must not inherit nutrition from a different food. The 2B
-model can still misidentify images; this change prevents forced catalog mappings,
-not all visual recognition errors.
+Keep the original model in place. Local, nonempty, seekable files are required;
+streams are rejected instead of silently copied. If access is revoked or the
+source disappears, select the original file again. Removing an imported model
+releases its permission/link and does not delete the original. Previously
+installed private copies and automatic downloads still use app-owned storage.
+The no-copy import is Android-specific; other platforms retain their file picker.

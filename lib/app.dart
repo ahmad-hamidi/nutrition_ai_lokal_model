@@ -10,7 +10,7 @@ class NutriLensApp extends StatelessWidget {
     const Color seed = Color(0xFF2E7D32);
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'NutriLens Qwen Offline',
+      title: 'NutriLens Offline AI',
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: seed),

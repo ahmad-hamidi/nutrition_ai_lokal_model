@@ -6,6 +6,6 @@ void main() {
   testWidgets('shows app title', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     await tester.pumpWidget(const NutriLensApp());
-    expect(find.text('NutriLens Qwen Offline'), findsOneWidget);
+    expect(find.text('NutriLens Offline AI'), findsOneWidget);
   });
 }
