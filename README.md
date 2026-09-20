@@ -1,5 +1,11 @@
 # NutriLens Offline AI
 
+<p>
+  <img src="screenshots/01-model-qwen.png" width="32%" alt="Setup model Qwen" />
+  <img src="screenshots/02-model-gemma.png" width="32%" alt="Setup model Gemma" />
+  <img src="screenshots/03-menu-7-hari.png" width="32%" alt="Menu 7 hari" />
+</p>
+
 Flutter Android MVP untuk foto makanan -> AI vision lokal -> identifikasi komponen -> estimasi porsi -> perhitungan nutrisi lokal -> resep. Aplikasi mendukung dua runtime AI yang dapat dipilih pengguna: Qwen3-VL-2B Q4 dan Gemma 3n E2B LiteRT-LM.
 
 ## Stack
