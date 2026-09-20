@@ -75,7 +75,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _error = null;
       _importing = true;
       _importProgress = 0;
-      _stage = 'Mengimpor Gemma 3n E2B LiteRT-LM...';
+      _stage = 'Menyalin Gemma 3n E2B LiteRT-LM ke penyimpanan privat...';
     });
     try {
       await _gemmaVision.dispose();
@@ -104,7 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _error = null;
       _importing = true;
       _importProgress = 0;
-      _stage = projector ? 'Memeriksa file vision projector...' : 'Memeriksa file Qwen3-VL Q4...';
+      _stage = projector ? 'Menyalin vision projector ke penyimpanan privat...' : 'Menyalin Qwen3-VL Q4 ke penyimpanan privat...';
     });
     try {
       final LocalModelStatus status = projector
@@ -685,7 +685,7 @@ class _ModelSetupCard extends StatelessWidget {
               ),
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('Impor Android memakai file asli tanpa salinan. Jangan pindahkan atau hapus file sumber. Melepas model impor tidak menghapus file asli.'),
+              child: Text('Impor menyalin model ke penyimpanan privat aplikasi. File sumber boleh dihapus setelah impor selesai. Pastikan ruang kosong cukup (Qwen ~1,6 GB, Gemma ~3,3 GB).'),
             ),
             if (importing) ...<Widget>[
               const SizedBox(height: 12),
@@ -698,7 +698,7 @@ class _ModelSetupCard extends StatelessWidget {
               TextButton.icon(
                 onPressed: importing ? null : onClear,
                 icon: const Icon(Icons.delete_outline),
-                label: const Text('Lepas model / hapus unduhan'),
+                label: const Text('Hapus model lokal'),
               ),
             ],
             if (status.error != null) ...<Widget>[

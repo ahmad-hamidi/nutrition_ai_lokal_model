@@ -7,8 +7,6 @@ import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'model_documents.dart';
-
 enum LocalAiModel { qwen3Vl, gemma3nE2b }
 
 extension LocalAiModelLabel on LocalAiModel {
@@ -46,12 +44,6 @@ class LocalModelStatus {
 typedef ModelTransferProgress = void Function(double progress);
 
 class LocalModelManager {
-  LocalModelManager({ModelDocuments? documents, bool? useDocuments})
-      : _documents = documents ?? ModelDocuments(),
-        _useDocuments = useDocuments ?? Platform.isAndroid;
-
-  final ModelDocuments _documents;
-  final bool _useDocuments;
   static const String _modelKey = 'qwen3_vl_model_path_v1';
   static const String _mmprojKey = 'qwen3_vl_mmproj_path_v1';
   static const String _gemmaKey = 'gemma3n_e2b_model_path_v1';
@@ -88,13 +80,12 @@ class LocalModelManager {
         orElse: () => LocalAiModel.qwen3Vl,
       );
       final errors = <String>[];
-      Future<String?> resolve(String? reference) async {
-        try {
-          return await _existingPath(reference);
-        } catch (_) {
-          errors.add('File model asli tidak dapat diakses. Pilih ulang file; jangan pindahkan atau hapus file sumber.');
-          return null;
+      Future<String?> resolve(String? stored) async {
+        final String? path = await _existingPath(stored);
+        if (stored != null && stored.isNotEmpty && path == null) {
+          errors.add('File model privat tidak ditemukan. Impor ulang model.');
         }
+        return path;
       }
       final model = await resolve(modelPath);
       final projector = await resolve(mmprojPath);
@@ -117,38 +108,57 @@ class LocalModelManager {
     return getStatus();
   }
 
-  Future<LocalModelStatus> importLanguageModel({ModelTransferProgress? onProgress}) =>
-      _importReference(_modelKey, ['gguf'], languageModelSha256, onProgress);
+  Future<LocalModelStatus> importLanguageModel({ModelTransferProgress? onProgress}) async {
+    final String? sourcePath = await _pickModel(<String>['gguf']);
+    if (sourcePath == null) return getStatus();
+    final String target = await _copyIntoPrivateStorage(
+      sourcePath,
+      targetName: languageModelFileName,
+      expectedSha256: languageModelSha256,
+      onProgress: onProgress,
+    );
+    await _saveModelPath(_modelKey, target);
+    return getStatus();
+  }
 
-  Future<LocalModelStatus> importVisionProjector({ModelTransferProgress? onProgress}) =>
-      _importReference(_mmprojKey, ['gguf'], visionProjectorSha256, onProgress);
+  Future<LocalModelStatus> importVisionProjector({ModelTransferProgress? onProgress}) async {
+    final String? sourcePath = await _pickModel(<String>['gguf']);
+    if (sourcePath == null) return getStatus();
+    final String target = await _copyIntoPrivateStorage(
+      sourcePath,
+      targetName: visionProjectorFileName,
+      expectedSha256: visionProjectorSha256,
+      onProgress: onProgress,
+    );
+    await _saveModelPath(_mmprojKey, target);
+    return getStatus();
+  }
 
-  Future<LocalModelStatus> importGemmaModel({ModelTransferProgress? onProgress}) =>
-      _importReference(_gemmaKey, ['litertlm'], null, onProgress);
+  Future<LocalModelStatus> importGemmaModel({ModelTransferProgress? onProgress}) async {
+    final String? sourcePath = await _pickModel(<String>['litertlm']);
+    if (sourcePath == null) return getStatus();
+    final String target = await _copyIntoPrivateStorage(
+      sourcePath,
+      targetName: gemmaModelFileName,
+      onProgress: onProgress,
+    );
 
-  Future<LocalModelStatus> _importReference(String key, List<String> extensions,
-      String? checksum, ModelTransferProgress? onProgress) async {
-    final String? reference = await _pickModel(extensions);
-    if (reference == null) return getStatus();
-    final prefs = await SharedPreferences.getInstance();
-    final old = prefs.getString(key);
     try {
-      final path = await _existingPath(reference);
-      if (path == null) throw StateError('File asli tidak tersedia. Pilih ulang model.');
-      if (checksum != null) await _verifySha256(File(path), checksum);
-      // Store the durable URI, not the process-specific /proc descriptor path.
-      await _saveModelPath(key, reference);
-    } catch (_) {
-      if (reference != old && reference.startsWith('content://')) {
-        await _releaseUnused(reference);
+      if (await FlutterGemma.isModelInstalled(gemmaModelFileName)) {
+        await FlutterGemma.uninstallModel(gemmaModelFileName);
+        await FlutterGemma.clearActiveInferenceIdentity();
       }
-      rethrow;
+    } catch (_) {
+      // Model metadata lama mungkin belum ada; lanjutkan instalasi baru.
     }
-    if (old != null && old != reference && old.startsWith('content://')) {
-      await _releaseUnused(old);
-    }
-    if (key == _gemmaKey) await selectModel(LocalAiModel.gemma3nE2b);
-    onProgress?.call(1);
+
+    await FlutterGemma.installModel(
+      modelType: ModelType.gemmaIt,
+      fileType: ModelFileType.litertlm,
+    ).fromFile(target).install();
+
+    await _saveModelPath(_gemmaKey, target);
+    await selectModel(LocalAiModel.gemma3nE2b);
     return getStatus();
   }
 
@@ -175,50 +185,41 @@ class LocalModelManager {
   }
 
   Future<void> clearQwen() async {
-    await _removeReference(_modelKey);
-    await _removeReference(_mmprojKey);
-    final dir = await _modelsDirectory();
-    for (final name in [languageModelFileName, visionProjectorFileName]) {
-      final part = File('${dir.path}/$name.part');
+    final LocalModelStatus status = await getStatus();
+    for (final String? path in <String?>[status.modelPath, status.mmprojPath]) {
+      if (path == null) continue;
+      final File file = File(path);
+      if (await file.exists()) await file.delete();
+    }
+
+    final Directory modelsDir = await _modelsDirectory();
+    for (final String name in <String>[languageModelFileName, visionProjectorFileName]) {
+      final File part = File('${modelsDir.path}/$name.part');
       if (await part.exists()) await part.delete();
     }
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_modelKey);
+    await prefs.remove(_mmprojKey);
   }
 
   Future<void> clearGemma() async {
-    await FlutterGemma.clearActiveInferenceIdentity();
-    await _removeReference(_gemmaKey);
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getString(_selectedModelKey) == LocalAiModel.gemma3nE2b.name) {
+    final LocalModelStatus status = await getStatus();
+    try {
+      await FlutterGemma.uninstallModel(gemmaModelFileName);
+      await FlutterGemma.clearActiveInferenceIdentity();
+    } catch (_) {
+      // Tetap hapus file/prefs walaupun metadata runtime sudah tidak ada.
+    }
+    if (status.gemmaPath != null) {
+      final File file = File(status.gemmaPath!);
+      if (await file.exists()) await file.delete();
+    }
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_gemmaKey);
+    if (status.selectedModel == LocalAiModel.gemma3nE2b) {
       await prefs.setString(_selectedModelKey, LocalAiModel.qwen3Vl.name);
     }
-  }
-
-  Future<void> _removeReference(String key) async {
-    final prefs = await SharedPreferences.getInstance();
-    final reference = prefs.getString(key);
-    await prefs.remove(key);
-    if (reference != null) {
-      if (reference.startsWith('content://')) {
-        await _releaseUnused(reference);
-      } else {
-        // Only delete app-owned downloaded/legacy copies, never an external file.
-        final dir = await _modelsDirectory();
-        if (File(reference).parent.path == dir.path) {
-          final file = File(reference);
-          if (await file.exists()) await file.delete();
-        }
-      }
-    }
-    await prefs.remove(key);
-  }
-
-  Future<void> _releaseUnused(String reference) async {
-    final prefs = await SharedPreferences.getInstance();
-    if ([_modelKey, _mmprojKey, _gemmaKey]
-        .any((key) => prefs.getString(key) == reference)) {
-      return;
-    }
-    await _documents.release(reference);
   }
 
   Future<void> clear() async {
@@ -227,7 +228,6 @@ class LocalModelManager {
   }
 
   Future<String?> _pickModel(List<String> extensions) async {
-    if (_useDocuments) return _documents.pick(extensions);
     // Android MimeTypeMap tidak mengenal '.gguf'/'.litertlm', sehingga
     // FileType.custom memicu warning "unsupported and will not be filtered".
     // Pakai FileType.any di Android untuk menghilangkan warning;
@@ -276,6 +276,65 @@ class LocalModelManager {
           'lalu coba lagi. Alternatif: gunakan tombol Download otomatis.';
     }
     return 'Gagal membuka file picker: ${error.message ?? error.code}';
+  }
+
+  /// Menyalin file model ke storage privat aplikasi dengan progress.
+  /// File sumber tidak diubah sehingga boleh dihapus setelah impor selesai.
+  Future<String> _copyIntoPrivateStorage(
+    String sourcePath, {
+    required String targetName,
+    String? expectedSha256,
+    ModelTransferProgress? onProgress,
+  }) async {
+    final File source = File(sourcePath);
+    if (!await source.exists()) {
+      throw StateError('File model tidak ditemukan: $sourcePath');
+    }
+
+    final Directory modelsDir = await _modelsDirectory();
+    final File target = File('${modelsDir.path}/$targetName');
+    final File temp = File('${modelsDir.path}/$targetName.importing');
+
+    if (await temp.exists()) await temp.delete();
+
+    try {
+      final int total = await source.length();
+      int copied = 0;
+      int lastPercent = -1;
+      final IOSink sink = temp.openWrite();
+      try {
+        await for (final List<int> chunk in source.openRead()) {
+          sink.add(chunk);
+          copied += chunk.length;
+          if (total > 0) {
+            final int percent = ((copied / total) * 100).floor();
+            if (percent != lastPercent) {
+              lastPercent = percent;
+              onProgress?.call(copied / total);
+            }
+          }
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+
+      if (await temp.length() != total) {
+        throw StateError('Copy model tidak lengkap. Coba impor ulang.');
+      }
+    } on FileSystemException catch (error) {
+      await temp.delete();
+      throw StateError(
+        'Gagal menyalin model ke penyimpanan privat (${error.message}). '
+        'Bebaskan ruang penyimpanan lalu coba lagi.',
+      );
+    }
+
+    if (expectedSha256 != null) await _verifySha256(temp, expectedSha256);
+    if (await target.exists()) await target.delete();
+    await temp.rename(target.path);
+    onProgress?.call(1);
+    return target.path;
   }
 
   Future<String> _downloadIntoPrivateStorage(
@@ -407,7 +466,6 @@ class LocalModelManager {
 
   Future<String?> _existingPath(String? path) async {
     if (path == null || path.isEmpty) return null;
-    if (path.startsWith('content://')) return _documents.open(path);
     return await File(path).exists() ? path : null;
   }
 }
